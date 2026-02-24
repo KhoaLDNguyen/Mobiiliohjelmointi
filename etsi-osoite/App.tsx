@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View, TextInput, Pressable, Text, StyleSheet, Alert, ActivityIndicator } from "react-native";
 import MapView, { Marker, Region } from "react-native-maps";
+import * as Location from "expo-location";
 
-type GeoResult = {
+type NominatimResult = {
   lat: string;
   lon: string;
   display_name: string;
@@ -13,14 +14,41 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   const [region, setRegion] = useState<Region>({
-    latitude: 60.171,
-    longitude: 24.941,
+    latitude: 60.1699, // fallback (Helsinki)
+    longitude: 24.9384,
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
   });
 
   const [marker, setMarker] = useState<{ lat: number; lon: number; title: string } | null>(null);
 
+  // ✅ Kun appi avautuu: pyydä lupa + hae nykyinen sijainti
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission denied", "Sijaintilupaa ei annettu.");
+          return;
+        }
+
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const lat = loc.coords.latitude;
+        const lon = loc.coords.longitude;
+
+        setRegion({
+          latitude: lat,
+          longitude: lon,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        });
+      } catch {
+        Alert.alert("Error", "Sijainnin hakeminen epäonnistui.");
+      }
+    })();
+  }, []);
+
+  // ✅ SHOW: etsi osoite ja näytä marker kartalla
   const show = async () => {
     const q = address.trim();
     if (!q) return;
@@ -28,25 +56,31 @@ export default function App() {
     try {
       setLoading(true);
 
-      const url = `https://geocode.maps.co/search?q=${encodeURIComponent(q)}`;
-      const res = await fetch(url);
-      const data: GeoResult[] = await res.json();
+      const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
+      const res = await fetch(geoUrl, { headers: { "User-Agent": "expo-app" } });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        Alert.alert("Geocode error", `${res.status}\n${txt.slice(0, 200)}`);
+        return;
+      }
+
+      const data: NominatimResult[] = await res.json();
 
       if (!Array.isArray(data) || data.length === 0) {
         Alert.alert("Not found", "Address not found.");
         return;
       }
 
-      const first = data[0];
-      const lat = Number(first.lat);
-      const lon = Number(first.lon);
+      const lat = Number(data[0].lat);
+      const lon = Number(data[0].lon);
 
       if (!isFinite(lat) || !isFinite(lon)) {
         Alert.alert("Error", "Invalid coordinates.");
         return;
       }
 
-      setMarker({ lat, lon, title: first.display_name });
+      setMarker({ lat, lon, title: data[0].display_name });
 
       setRegion({
         latitude: lat,
@@ -65,7 +99,10 @@ export default function App() {
     <View style={styles.container}>
       <MapView style={styles.map} region={region}>
         {marker && (
-          <Marker coordinate={{ latitude: marker.lat, longitude: marker.lon }} title={marker.title} />
+          <Marker
+            coordinate={{ latitude: marker.lat, longitude: marker.lon }}
+            title={marker.title}
+          />
         )}
       </MapView>
 
